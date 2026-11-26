@@ -22,6 +22,8 @@ import time
 import urllib.parse
 
 import httpx
+
+import practice_search
 from mcp.server.fastmcp import FastMCP
 
 BASE = "https://sudact.ru"
@@ -335,6 +337,7 @@ def _do_search(
     all_results: list[dict] = []
     per_section: dict[str, str | int | None] = {}
     skipped_by_section: dict[str, list[str]] = {}
+    unconfirmed_sections = []
     with _client() as client:
         for section in sections:
             qs, skipped, err = _build_query(
@@ -355,6 +358,8 @@ def _do_search(
             if skipped:
                 skipped_by_section[SECTIONS.get(section, section)] = skipped
             content, total = _search_section(client, section, qs)
+            if content is None or (not content and total is None):
+                unconfirmed_sections.append(section)
             found = _parse_results(content, section, max_per_section)
             if isinstance(total, str):
                 total = _strip_tags(total) or "—"
@@ -376,6 +381,8 @@ def _do_search(
         "note": "Источник: sudact.ru (СудАкт). total_found — общее число совпадений в разделе, "
         "results — текущая страница (по умолчанию 10 на раздел).",
     }
+    if unconfirmed_sections:
+        out["unconfirmed_sections"] = unconfirmed_sections
     if skipped_by_section:
         out["filters_ignored"] = skipped_by_section
         out["note"] += (" ВНИМАНИЕ: часть фильтров не поддерживается некоторыми разделами "
@@ -484,6 +491,24 @@ def search_court_practice(
         query, scope, article, case_number, date_from, date_to, page,
         max_per_section, area=area, court=court, judge=judge, instance=instance,
     )
+
+
+@mcp.tool()
+def search_relevant_practice(question: str, queries: list[str] | None = None,
+                             scope: str = "arbitral", limit: int = 5) -> dict:
+    """Найти до пяти актов и фрагменты мотивировки по одному вопросу.
+    Передайте вопрос и 2–3 варианта его юридической формулировки: предмет спора,
+    характерные обстоятельства, фраза из возможной мотивировки. Без queries
+    используются фразы из самого вопроса. Выберите один судебный раздел.
+    Фрагменты отобраны по текстовому сходству. Проверьте обстоятельства и исход.
+    """
+    if scope not in PRACTICE_SECTIONS:
+        return {"error": "Выберите раздел: arbitral, vsrf, regular или magistrate."}
+    try:
+        return practice_search.search(question, queries, scope, limit,
+                                      lookup=_do_search, fetch=_do_get)
+    except ValueError as exc:
+        return {"error": str(exc)}
 
 
 @mcp.tool()
